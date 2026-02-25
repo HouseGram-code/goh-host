@@ -2,11 +2,12 @@
 
 import { useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase';
-import { User } from '@supabase/supabase-js';
 import { useRouter } from 'next/navigation';
 
 export default function AuthPage() {
   const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [isSignUp, setIsSignUp] = useState(false);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState('');
   const router = useRouter();
@@ -21,29 +22,43 @@ export default function AuthPage() {
     checkUser();
   }, [router]);
 
-  const handleLogin = async (e: React.FormEvent) => {
+  const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setMessage('');
 
-    // Using Magic Link for simplicity as requested "enter name and email"
-    // Ideally we would use password or OAuth, but Magic Link is standard Supabase.
-    // However, user said "enter name and email, no account can create".
-    // We'll use email OTP or Magic Link. Let's stick to Magic Link for now as it handles "create if not exists".
-    
-    const { error } = await supabase.auth.signInWithOtp({
-      email,
-      options: {
-        emailRedirectTo: `${window.location.origin}/auth/callback`,
-      },
-    });
-
-    if (error) {
+    try {
+      if (isSignUp) {
+        const { error } = await supabase.auth.signUp({
+          email,
+          password,
+        });
+        if (error) throw error;
+        // If email confirmation is disabled in Supabase, this logs them in immediately.
+        // If enabled, it asks to check email.
+        // We will instruct user to disable confirmation to bypass rate limits.
+        
+        // Check if session was created immediately (auto-confirm enabled)
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session) {
+            router.push('/dashboard');
+        } else {
+            setMessage('Аккаунт создан! Если вы отключили подтверждение почты, войдите сейчас.');
+            setIsSignUp(false);
+        }
+      } else {
+        const { error } = await supabase.auth.signInWithPassword({
+          email,
+          password,
+        });
+        if (error) throw error;
+        router.push('/dashboard');
+      }
+    } catch (error: any) {
       setMessage('Ошибка: ' + error.message);
-    } else {
-      setMessage('Ссылка для входа отправлена на вашу почту!');
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   return (
@@ -62,7 +77,7 @@ export default function AuthPage() {
           <p className="text-gray-500 text-sm uppercase tracking-widest">0.1 Beta</p>
         </div>
 
-        <form onSubmit={handleLogin} className="space-y-6">
+        <form onSubmit={handleAuth} className="space-y-6">
           <div>
             <label className="block text-xs font-medium text-gray-400 uppercase tracking-wider mb-2">Email</label>
             <input
@@ -75,14 +90,36 @@ export default function AuthPage() {
             />
           </div>
 
+          <div>
+            <label className="block text-xs font-medium text-gray-400 uppercase tracking-wider mb-2">Пароль</label>
+            <input
+              type="password"
+              required
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              className="w-full bg-[#111] border border-[#333] rounded-lg px-4 py-3 text-white focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all"
+              placeholder="••••••••"
+              minLength={6}
+            />
+          </div>
+
           <button
             type="submit"
             disabled={loading}
             className="w-full bg-blue-600 hover:bg-blue-500 text-white font-medium py-3 rounded-lg transition-colors shadow-lg shadow-blue-900/20 disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {loading ? 'Отправка...' : 'Войти / Регистрация'}
+            {loading ? 'Загрузка...' : (isSignUp ? 'Создать аккаунт' : 'Войти')}
           </button>
         </form>
+
+        <div className="mt-6 text-center">
+            <button 
+                onClick={() => { setIsSignUp(!isSignUp); setMessage(''); }}
+                className="text-sm text-gray-500 hover:text-white transition-colors"
+            >
+                {isSignUp ? 'Уже есть аккаунт? Войти' : 'Нет аккаунта? Регистрация'}
+            </button>
+        </div>
 
         {message && (
           <div className={`mt-6 p-4 rounded-lg text-sm text-center ${message.includes('Ошибка') ? 'bg-red-900/20 text-red-400' : 'bg-green-900/20 text-green-400'}`}>
