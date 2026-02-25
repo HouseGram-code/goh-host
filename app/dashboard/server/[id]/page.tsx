@@ -15,6 +15,7 @@ type ServerInstance = {
   version: string;
   status: 'running' | 'stopped' | 'error';
   created_at: string;
+  user_id: string;
 };
 
 export default function ServerControlPanel() {
@@ -25,23 +26,96 @@ export default function ServerControlPanel() {
   const terminalRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<Terminal | null>(null);
 
+  const [files, setFiles] = useState<any[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const filesRef = useRef(files);
+
   useEffect(() => {
-    const fetchServer = async () => {
-        const { data, error } = await supabase
+    filesRef.current = files;
+  }, [files]);
+
+  // Fetch Server & Files
+  useEffect(() => {
+    const fetchData = async () => {
+        // 1. Fetch Server
+        const { data: serverData, error: serverError } = await supabase
             .from('servers')
             .select('*')
             .eq('id', params.id)
             .single();
         
-        if (error || !data) {
-            console.error('Error fetching server:', error);
+        if (serverError || !serverData) {
+            console.error('Error fetching server:', serverError);
             router.push('/dashboard');
             return;
         }
-        setServer(data);
+        setServer(serverData);
+
+        // 2. Fetch Files (Real from Supabase Storage)
+        // Path: {user_id}/{server_id}/
+        const { data: filesData, error: filesError } = await supabase
+            .storage
+            .from('server-files')
+            .list(`${serverData.user_id}/${serverData.id}`);
+
+        if (filesError) {
+            console.error('Error fetching files:', filesError);
+            // If bucket doesn't exist, filesData is null.
+        } else {
+            setFiles(filesData || []);
+        }
     };
-    fetchServer();
+    fetchData();
   }, [params.id, router]);
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files || e.target.files.length === 0 || !server) return;
+    setUploading(true);
+
+    const file = e.target.files[0];
+    const path = `${server.user_id}/${server.id}/${file.name}`;
+
+    const { error } = await supabase.storage
+        .from('server-files')
+        .upload(path, file, {
+            upsert: true
+        });
+
+    if (error) {
+        alert('Upload failed: ' + error.message);
+        if (xtermRef.current) xtermRef.current.writeln(`\r\n\x1b[31mError uploading ${file.name}: ${error.message}\x1b[0m`);
+    } else {
+        // Refresh list
+        const { data } = await supabase.storage
+            .from('server-files')
+            .list(`${server.user_id}/${server.id}`);
+        setFiles(data || []);
+        if (xtermRef.current) xtermRef.current.writeln(`\r\n\x1b[32mFile uploaded: ${file.name}\x1b[0m`);
+    }
+    setUploading(false);
+    // Reset input
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const handleDeleteFile = async (fileName: string) => {
+    if (!server) return;
+    const path = `${server.user_id}/${server.id}/${fileName}`;
+    
+    const { error } = await supabase.storage
+        .from('server-files')
+        .remove([path]);
+
+    if (error) {
+        alert('Delete failed: ' + error.message);
+    } else {
+        const { data } = await supabase.storage
+            .from('server-files')
+            .list(`${server.user_id}/${server.id}`);
+        setFiles(data || []);
+        if (xtermRef.current) xtermRef.current.writeln(`\r\n\x1b[33mFile deleted: ${fileName}\x1b[0m`);
+    }
+  };
 
   // Terminal Init
   useEffect(() => {
@@ -61,37 +135,43 @@ export default function ServerControlPanel() {
       term.open(terminalRef.current);
       fitAddon.fit();
       
-      term.writeln('\x1b[1;34mWelcome to Goh Host Terminal\x1b[0m');
-      term.writeln('Connected to server instance...');
+      term.writeln('\x1b[1;34mGoh Host Shell v0.1\x1b[0m');
+      term.writeln('Connected to storage...');
       term.write('$ ');
 
       let currentLine = '';
       
-      term.onData(e => {
+      term.onData(async (e) => {
         // Handle Enter
         if (e === '\r') {
             term.write('\r\n');
             const trimmed = currentLine.trim();
+            const parts = trimmed.split(' ');
+            const cmd = parts[0];
             
-            if (trimmed.startsWith('pip install')) {
-                const parts = trimmed.split(' ');
-                if (parts.length > 2) {
-                    const pkg = parts[2];
-                    term.writeln(`\x1b[33mCollecting ${pkg}...\x1b[0m`);
-                    term.writeln(`Downloading ${pkg}-1.0.0-py3-none-any.whl (10 kB)`);
-                    term.writeln(`Installing collected packages: ${pkg}`);
-                    term.writeln(`\x1b[32mSuccessfully installed ${pkg}-1.0.0\x1b[0m`);
+            if (cmd === 'ls') {
+                // Real LS from state (using ref to get fresh data)
+                const currentFiles = filesRef.current;
+                if (currentFiles.length === 0) {
+                    term.writeln('(empty)');
                 } else {
-                    term.writeln('\x1b[31mERROR: You must give at least one requirement to install\x1b[0m');
+                    currentFiles.forEach(f => {
+                        term.writeln(`${f.name}  \x1b[90m${(f.metadata?.size / 1024).toFixed(1)}KB\x1b[0m`);
+                    });
                 }
-            } else if (trimmed === 'python --version') {
-                // Use optional chaining or default since server might be stale in closure
-                // Ideally we use a ref for current server state, but for this demo:
-                term.writeln(`Python 3.11`); 
-            } else if (trimmed === 'ls') {
-                term.writeln('main.py  requirements.txt  venv');
+            } else if (cmd === 'rm' && parts[1]) {
+                // We can't easily call the async handleDeleteFile from here without triggering state updates that might re-render terminal
+                // But let's try invoking it.
+                term.writeln(`Deleting ${parts[1]}...`);
+                // Note: In a real app we'd need to handle this better, but for now:
+                // We can't call handleDeleteFile directly if it depends on state that isn't in ref? 
+                // It depends on 'server' which is also stale.
+                // Let's just say "Use UI to delete" or implement a simple delete here if we had serverRef.
+                term.writeln('Please use the Files tab to delete files in this version.');
+            } else if (cmd === 'help') {
+                term.writeln('Available commands: ls, help');
             } else if (trimmed !== '') {
-                term.writeln(`\x1b[31mbash: ${trimmed.split(' ')[0]}: command not found\x1b[0m`);
+                term.writeln(`\x1b[31mbash: ${cmd}: command not found\x1b[0m`);
             }
             
             term.write('$ ');
@@ -117,7 +197,7 @@ export default function ServerControlPanel() {
       window.addEventListener('resize', handleResize);
       return () => window.removeEventListener('resize', handleResize);
     }
-  }, [activeTab]);
+  }, [activeTab]); // Removed files dependency to prevent re-init
 
   const toggleStatus = async () => {
     if (!server) return;
@@ -246,26 +326,51 @@ export default function ServerControlPanel() {
           
           {activeTab === 'files' && (
             <div className="flex-1 p-8">
-                <div className="border-2 border-dashed border-[#333] rounded-2xl h-64 flex flex-col items-center justify-center text-gray-500 hover:border-blue-500 hover:text-blue-500 transition-colors cursor-pointer bg-[#0a0a0a]">
-                    <Upload className="w-12 h-12 mb-4" />
-                    <p className="font-medium">Перетащите файлы сюда</p>
-                    <p className="text-sm opacity-60 mt-2">или нажмите для выбора</p>
+                <input 
+                    type="file" 
+                    ref={fileInputRef}
+                    onChange={handleFileUpload}
+                    className="hidden" 
+                />
+                <div 
+                    onClick={() => fileInputRef.current?.click()}
+                    className="border-2 border-dashed border-[#333] rounded-2xl h-32 flex flex-col items-center justify-center text-gray-500 hover:border-blue-500 hover:text-blue-500 transition-colors cursor-pointer bg-[#0a0a0a]"
+                >
+                    {uploading ? (
+                        <RefreshCw className="w-8 h-8 animate-spin mb-2" />
+                    ) : (
+                        <Upload className="w-8 h-8 mb-2" />
+                    )}
+                    <p className="font-medium">{uploading ? 'Загрузка...' : 'Загрузить файл'}</p>
                 </div>
                 
                 <div className="mt-8">
-                    <h3 className="font-bold mb-4">Файлы сервера</h3>
-                    <div className="bg-[#0a0a0a] border border-[#222] rounded-lg overflow-hidden">
-                        <div className="p-3 border-b border-[#222] flex items-center gap-3 hover:bg-[#111]">
-                            <FileText className="w-4 h-4 text-blue-500" />
-                            <span>main.py</span>
-                            <span className="ml-auto text-xs text-gray-600">2.4 KB</span>
+                    <h3 className="font-bold mb-4 flex items-center gap-2">
+                        Файлы сервера
+                        <span className="text-xs bg-[#222] px-2 py-1 rounded-full text-gray-400">{files.length}</span>
+                    </h3>
+                    
+                    {files.length === 0 ? (
+                        <div className="text-center text-gray-600 py-8">Нет файлов. Загрузите что-нибудь.</div>
+                    ) : (
+                        <div className="bg-[#0a0a0a] border border-[#222] rounded-lg overflow-hidden">
+                            {files.map((file) => (
+                                <div key={file.name} className="p-3 border-b border-[#222] flex items-center gap-3 hover:bg-[#111] group">
+                                    <FileText className="w-4 h-4 text-blue-500" />
+                                    <span>{file.name}</span>
+                                    <span className="text-xs text-gray-600 ml-2">
+                                        {(file.metadata?.size / 1024).toFixed(1)} KB
+                                    </span>
+                                    <button 
+                                        onClick={() => handleDeleteFile(file.name)}
+                                        className="ml-auto text-red-500 opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-900/20 p-1 rounded"
+                                    >
+                                        <div className="w-4 h-4">×</div>
+                                    </button>
+                                </div>
+                            ))}
                         </div>
-                        <div className="p-3 border-b border-[#222] flex items-center gap-3 hover:bg-[#111]">
-                            <FileText className="w-4 h-4 text-yellow-500" />
-                            <span>requirements.txt</span>
-                            <span className="ml-auto text-xs text-gray-600">128 B</span>
-                        </div>
-                    </div>
+                    )}
                 </div>
             </div>
           )}
