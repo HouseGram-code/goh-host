@@ -112,11 +112,22 @@ export default function ServerControlPanel() {
         pyodide.setStdout({ batched: (msg: string) => term.writeln(msg) });
         pyodide.setStderr({ batched: (msg: string) => term.writeln(`\x1b[31m${msg}\x1b[0m`) });
 
+        // Pre-load common packages that might be needed
+        try {
+            await pyodide.loadPackage("ssl");
+        } catch (e) {}
+
         await pyodide.runPythonAsync(text);
         term.writeln('\x1b[32mProcess finished.\x1b[0m');
 
     } catch (e: any) {
         term.writeln(`\x1b[31mTraceback (most recent call last):\r\n${e.message}\x1b[0m`);
+        if (e.message.includes("can't start new thread") || e.message.includes('socket')) {
+            term.writeln('\x1b[33m\r\n[Goh Host Beta Note]:\x1b[0m');
+            term.writeln('\x1b[33mThe current browser-based Python runtime (Pyodide) does not support threading or raw TCP sockets.\x1b[0m');
+            term.writeln('\x1b[33mLibraries like `telebot` or `discord.py` that rely on background threads or sockets will crash.\x1b[0m');
+            term.writeln('\x1b[33mFor bots, consider using async libraries (like `aiogram`) with webhooks, or wait for the full backend release!\x1b[0m');
+        }
     }
   };
 
