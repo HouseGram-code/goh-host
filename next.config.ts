@@ -20,6 +20,12 @@ const nextConfig: NextConfig = {
     ],
   },
   output: 'standalone',
+  experimental: {
+    allowedDevOrigins: [
+      'ais-dev-rcei773m6shlgkcdtp6jt7-6560868183.us-west2.run.app',
+      'ais-pre-rcei773m6shlgkcdtp6jt7-6560868183.us-west2.run.app',
+    ],
+  },
   transpilePackages: ['motion'],
   webpack: (config, {dev}) => {
     // HMR is disabled in AI Studio via DISABLE_HMR env var.

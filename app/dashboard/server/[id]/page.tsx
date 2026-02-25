@@ -25,7 +25,14 @@ export default function ServerControlPanel() {
   const [activeTab, setActiveTab] = useState<'terminal' | 'logs' | 'files'>('terminal');
   const terminalRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<Terminal | null>(null);
+  const serverRef = useRef(server);
 
+  useEffect(() => {
+    serverRef.current = server;
+  }, [server]);
+
+  const [pyodide, setPyodide] = useState<any>(null);
+  const [pyodideLoading, setPyodideLoading] = useState(false);
   const [files, setFiles] = useState<any[]>([]);
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -34,6 +41,84 @@ export default function ServerControlPanel() {
   useEffect(() => {
     filesRef.current = files;
   }, [files]);
+
+  // Load Pyodide
+  useEffect(() => {
+    const loadPyodideScript = async () => {
+      if ((window as any).loadPyodide) {
+        setPyodideLoading(true);
+        const py = await (window as any).loadPyodide();
+        setPyodide(py);
+        setPyodideLoading(false);
+        if (xtermRef.current) xtermRef.current.writeln('\x1b[32mPython runtime ready.\x1b[0m');
+        return;
+      }
+
+      const script = document.createElement('script');
+      script.src = 'https://cdn.jsdelivr.net/pyodide/v0.25.0/full/pyodide.js';
+      script.onload = async () => {
+        setPyodideLoading(true);
+        try {
+            const py = await (window as any).loadPyodide();
+            setPyodide(py);
+            if (xtermRef.current) xtermRef.current.writeln('\x1b[32mPython runtime loaded.\x1b[0m');
+        } catch (e) {
+            console.error(e);
+        }
+        setPyodideLoading(false);
+      };
+      document.body.appendChild(script);
+    };
+    
+    if (activeTab === 'terminal') {
+        loadPyodideScript();
+    }
+  }, [activeTab]);
+
+  const runPythonFile = async (fileName: string, term: Terminal) => {
+    if (!pyodide) {
+        term.writeln('\x1b[31mPython runtime not loaded yet. Please wait.\x1b[0m');
+        return;
+    }
+
+    const currentServer = serverRef.current;
+    if (!currentServer) {
+        term.writeln('\x1b[31mServer state not ready.\x1b[0m');
+        return;
+    }
+
+    const file = filesRef.current.find(f => f.name === fileName);
+    if (!file) {
+        term.writeln(`\x1b[31mFile not found: ${fileName}\x1b[0m`);
+        return;
+    }
+
+    term.writeln(`\x1b[33mRunning ${fileName}...\x1b[0m`);
+
+    try {
+        // Fetch file content
+        const { data, error } = await supabase.storage
+            .from('server-files')
+            .download(`${currentServer.user_id}/${currentServer.id}/${fileName}`);
+        
+        if (error || !data) {
+            term.writeln(`\x1b[31mError reading file: ${error?.message}\x1b[0m`);
+            return;
+        }
+
+        const text = await data.text();
+
+        // Redirect stdout
+        pyodide.setStdout({ batched: (msg: string) => term.writeln(msg) });
+        pyodide.setStderr({ batched: (msg: string) => term.writeln(`\x1b[31m${msg}\x1b[0m`) });
+
+        await pyodide.runPythonAsync(text);
+        term.writeln('\x1b[32mProcess finished.\x1b[0m');
+
+    } catch (e: any) {
+        term.writeln(`\x1b[31mTraceback (most recent call last):\r\n${e.message}\x1b[0m`);
+    }
+  };
 
   // Fetch Server & Files
   useEffect(() => {
@@ -99,8 +184,9 @@ export default function ServerControlPanel() {
   };
 
   const handleDeleteFile = async (fileName: string) => {
-    if (!server) return;
-    const path = `${server.user_id}/${server.id}/${fileName}`;
+    const currentServer = serverRef.current;
+    if (!currentServer) return;
+    const path = `${currentServer.user_id}/${currentServer.id}/${fileName}`;
     
     const { error } = await supabase.storage
         .from('server-files')
@@ -111,7 +197,7 @@ export default function ServerControlPanel() {
     } else {
         const { data } = await supabase.storage
             .from('server-files')
-            .list(`${server.user_id}/${server.id}`);
+            .list(`${currentServer.user_id}/${currentServer.id}`);
         setFiles(data || []);
         if (xtermRef.current) xtermRef.current.writeln(`\r\n\x1b[33mFile deleted: ${fileName}\x1b[0m`);
     }
@@ -158,6 +244,27 @@ export default function ServerControlPanel() {
                     currentFiles.forEach(f => {
                         term.writeln(`${f.name}  \x1b[90m${(f.metadata?.size / 1024).toFixed(1)}KB\x1b[0m`);
                     });
+                }
+            } else if (cmd === 'python') {
+                if (parts[1]) {
+                    await runPythonFile(parts[1], term);
+                } else {
+                    term.writeln('Python 3.11.0 (main, Oct 24 2022, 18:26:48) [Clang 13.0.0 (clang-1300.0.29.30)] on darwin');
+                    term.writeln('Type "help", "copyright", "credits" or "license" for more information.');
+                    term.writeln('\x1b[33m(Interactive REPL not supported in this beta. Use "python <file>")\x1b[0m');
+                }
+            } else if (cmd === 'cat' && parts[1]) {
+                const currentServer = serverRef.current;
+                if (currentServer) {
+                    const { data, error } = await supabase.storage
+                        .from('server-files')
+                        .download(`${currentServer.user_id}/${currentServer.id}/${parts[1]}`);
+                    if (error || !data) {
+                        term.writeln(`cat: ${parts[1]}: No such file or directory`);
+                    } else {
+                        const text = await data.text();
+                        term.writeln(text.replace(/\n/g, '\r\n'));
+                    }
                 }
             } else if (cmd === 'rm' && parts[1]) {
                 // We can't easily call the async handleDeleteFile from here without triggering state updates that might re-render terminal
