@@ -1,0 +1,38 @@
+@import "tailwindcss";
+@import "xterm/css/xterm.css";
+
+:root {
+  --background: #050505;
+  --foreground: #ffffff;
+  --primary: #0070f3; /* Bright Blue */
+  --primary-dark: #0051a8;
+  --secondary: #111111;
+  --accent: #00e1ff; /* Cyan accent */
+  --surface: #0a0a0a;
+  --border: #222222;
+}
+
+body {
+  background-color: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--background);
+}
+
+::-webkit-scrollbar-thumb {
+  background: #333;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #555;
+}

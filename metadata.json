@@ -1,0 +1,5 @@
+{
+  "name": "Goh Host",
+  "description": "A Python hosting control panel with server management, terminal, and file uploads.",
+  "requestFramePermissions": []
+}
