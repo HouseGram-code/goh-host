@@ -253,6 +253,25 @@ export default function ServerControlPanel() {
                     term.writeln('Type "help", "copyright", "credits" or "license" for more information.');
                     term.writeln('\x1b[33m(Interactive REPL not supported in this beta. Use "python <file>")\x1b[0m');
                 }
+            } else if (cmd === 'pip') {
+                if (parts[1] === 'install' && parts[2]) {
+                    const pkg = parts[2];
+                    if (!pyodide) {
+                        term.writeln('\x1b[31mPython runtime not loaded yet. Please wait.\x1b[0m');
+                    } else {
+                        term.writeln(`\x1b[33mCollecting ${pkg}...\x1b[0m`);
+                        try {
+                            await pyodide.loadPackage("micropip");
+                            const micropip = pyodide.pyimport("micropip");
+                            await micropip.install(pkg);
+                            term.writeln(`\x1b[32mSuccessfully installed ${pkg}\x1b[0m`);
+                        } catch (e: any) {
+                            term.writeln(`\x1b[31mError installing ${pkg}: ${e.message}\x1b[0m`);
+                        }
+                    }
+                } else {
+                    term.writeln('\x1b[31mUsage: pip install <package>\x1b[0m');
+                }
             } else if (cmd === 'cat' && parts[1]) {
                 const currentServer = serverRef.current;
                 if (currentServer) {

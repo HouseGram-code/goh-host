@@ -21,6 +21,7 @@ const nextConfig = {
   },
   output: 'standalone',
   experimental: {
+    // @ts-ignore
     allowedDevOrigins: [
       'ais-dev-rcei773m6shlgkcdtp6jt7-6560868183.us-west2.run.app',
       'ais-pre-rcei773m6shlgkcdtp6jt7-6560868183.us-west2.run.app',
